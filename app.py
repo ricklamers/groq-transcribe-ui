@@ -5,13 +5,15 @@ import sys
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal, Slot, QSettings
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGroupBox,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -120,36 +122,44 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
+        # Configuration group
+        config_group = QGroupBox("Configuration")
+        config_layout = QVBoxLayout(config_group)
+
         # API key
         api_layout = QHBoxLayout()
         api_layout.addWidget(QLabel("GROQ_API_KEY:"))
         self.api_edit = QLineEdit()
         self.api_edit.setEchoMode(QLineEdit.Password)
+        self.api_edit.setToolTip("Your Groq API key. Stored locally when you click Save Key.")
         existing = get_api_key() or ""
         self.api_edit.setText(existing)
         api_layout.addWidget(self.api_edit)
         self.save_key_btn = QPushButton("Save Key")
+        self.save_key_btn.setToolTip("Save the API key to local config")
         self.save_key_btn.clicked.connect(self.on_save_key)
         api_layout.addWidget(self.save_key_btn)
-        layout.addLayout(api_layout)
+        config_layout.addLayout(api_layout)
 
         # Language
         lang_layout = QHBoxLayout()
         lang_layout.addWidget(QLabel("Language (e.g. en, nl, fr) optional:"))
         self.lang_edit = QLineEdit()
-        self.lang_edit.setPlaceholderText("e.g. en, nl, fr")
+        self.lang_edit.setPlaceholderText("Leave blank for auto-detect")
+        self.lang_edit.setToolTip("Language hint for the model. Leave blank to auto-detect.")
         self.lang_edit.setText("nl")
         lang_layout.addWidget(self.lang_edit)
-        layout.addLayout(lang_layout)
+        config_layout.addLayout(lang_layout)
 
         # STT Model selector
         model_layout = QHBoxLayout()
         model_layout.addWidget(QLabel("STT Model:"))
         self.model_combo = QComboBox()
-        self.model_combo.addItems(["whisper-large-v3-turbo", "whisper-large-v3"])
-        self.model_combo.setCurrentText("whisper-large-v3-turbo")
+        self.model_combo.addItems(["whisper-large-v3", "whisper-large-v3-turbo"])
+        self.model_combo.setCurrentText("whisper-large-v3")
+        self.model_combo.setToolTip("Speech-to-text model used for transcription.")
         model_layout.addWidget(self.model_combo)
-        layout.addLayout(model_layout)
+        config_layout.addLayout(model_layout)
 
         # Parallelism for chunking
         chunk_par_layout = QHBoxLayout()
@@ -158,8 +168,9 @@ class MainWindow(QMainWindow):
         self.chunk_parallel_spin.setMinimum(1)
         self.chunk_parallel_spin.setMaximum(16)
         self.chunk_parallel_spin.setValue(8)
+        self.chunk_parallel_spin.setToolTip("How many chunks are prepared in parallel while pre-processing.")
         chunk_par_layout.addWidget(self.chunk_parallel_spin)
-        layout.addLayout(chunk_par_layout)
+        config_layout.addLayout(chunk_par_layout)
 
         # Parallelism for transcription
         tr_par_layout = QHBoxLayout()
@@ -168,8 +179,9 @@ class MainWindow(QMainWindow):
         self.transcribe_parallel_spin.setMinimum(1)
         self.transcribe_parallel_spin.setMaximum(16)
         self.transcribe_parallel_spin.setValue(8)
+        self.transcribe_parallel_spin.setToolTip("Number of audio chunks transcribed simultaneously.")
         tr_par_layout.addWidget(self.transcribe_parallel_spin)
-        layout.addLayout(tr_par_layout)
+        config_layout.addLayout(tr_par_layout)
 
         # Timestamp options
         ts_layout = QHBoxLayout()
@@ -177,19 +189,22 @@ class MainWindow(QMainWindow):
         self.ts_combo = QComboBox()
         self.ts_combo.addItems(["none", "segment", "word"])
         self.ts_combo.setCurrentText("segment")
+        self.ts_combo.setToolTip("Include timestamps per segment or per word, or disable.")
         ts_layout.addWidget(self.ts_combo)
 
         self.group_checkbox = QCheckBox("Group natural breaks (max chars)")
         self.group_checkbox.setChecked(True)
+        self.group_checkbox.setToolTip("Group transcript into readable paragraphs by natural pauses.")
         ts_layout.addWidget(self.group_checkbox)
 
         self.max_chars_spin = QSpinBox()
         self.max_chars_spin.setMinimum(40)
         self.max_chars_spin.setMaximum(400)
         self.max_chars_spin.setValue(100)
+        self.max_chars_spin.setToolTip("Upper bound of characters per grouped paragraph.")
         ts_layout.addWidget(self.max_chars_spin)
 
-        layout.addLayout(ts_layout)
+        config_layout.addLayout(ts_layout)
 
         # LLM strategy
         llm_layout = QHBoxLayout()
@@ -197,8 +212,11 @@ class MainWindow(QMainWindow):
         self.llm_combo = QComboBox()
         self.llm_combo.addItems(["concat_only", "always", "never"])
         self.llm_combo.setCurrentText("concat_only")
+        self.llm_combo.setToolTip("How chunk boundaries are merged: LLM assist always/never or concatenate only.")
         llm_layout.addWidget(self.llm_combo)
-        layout.addLayout(llm_layout)
+        config_layout.addLayout(llm_layout)
+
+        layout.addWidget(config_group)
 
         # Splitter for output and logs
         splitter = QSplitter()
@@ -206,6 +224,17 @@ class MainWindow(QMainWindow):
         out_container = QWidget()
         out_layout = QVBoxLayout(out_container)
         out_layout.addWidget(QLabel("Transcript Output"))
+        actions_layout = QHBoxLayout()
+        self.copy_btn = QPushButton("Copy")
+        self.copy_btn.setToolTip("Copy transcript to clipboard (Cmd/Ctrl+C)")
+        self.copy_btn.clicked.connect(self.on_copy_output)
+        self.save_btn = QPushButton("Save…")
+        self.save_btn.setToolTip("Save transcript to a .txt file")
+        self.save_btn.clicked.connect(self.on_save_output)
+        actions_layout.addWidget(self.copy_btn)
+        actions_layout.addWidget(self.save_btn)
+        actions_layout.addStretch(1)
+        out_layout.addLayout(actions_layout)
         self.output = QTextEdit()
         self.output.setReadOnly(True)
         out_layout.addWidget(self.output)
@@ -221,13 +250,16 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.log_view)
         splitter.addWidget(log_container)
 
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
         layout.addWidget(splitter)
 
         # File picker
         file_layout = QHBoxLayout()
         self.file_label = QLabel("No file selected")
         file_layout.addWidget(self.file_label)
-        self.file_btn = QPushButton("Choose Audio File")
+        self.file_btn = QPushButton("Choose Audio File…")
+        self.file_btn.setToolTip("Open an audio file to transcribe (Cmd/Ctrl+O)")
         self.file_btn.clicked.connect(self.on_choose_file)
         file_layout.addWidget(self.file_btn)
         layout.addLayout(file_layout)
@@ -235,6 +267,7 @@ class MainWindow(QMainWindow):
         # Controls
         ctrl_layout = QHBoxLayout()
         self.start_btn = QPushButton("Transcribe")
+        self.start_btn.setToolTip("Start transcription (Cmd/Ctrl+Enter)")
         self.start_btn.clicked.connect(self.on_start)
         ctrl_layout.addWidget(self.start_btn)
         layout.addLayout(ctrl_layout)
@@ -242,11 +275,13 @@ class MainWindow(QMainWindow):
         # Progress and status
         self.chunk_progress = QProgressBar()
         self.chunk_progress.setRange(0, 100)
+        self.chunk_progress.setTextVisible(True)
         layout.addWidget(QLabel("Chunking Progress"))
         layout.addWidget(self.chunk_progress)
 
         self.transcribe_progress = QProgressBar()
         self.transcribe_progress.setRange(0, 100)
+        self.transcribe_progress.setTextVisible(True)
         layout.addWidget(QLabel("Transcription Progress"))
         layout.addWidget(self.transcribe_progress)
 
@@ -266,6 +301,18 @@ class MainWindow(QMainWindow):
         self.group_checkbox.toggled.connect(self.on_format_options_changed)
         self.max_chars_spin.valueChanged.connect(self.on_format_options_changed)
 
+        # Shortcuts
+        self.sc_open = QShortcut(QKeySequence(QKeySequence.StandardKey.Open), self)
+        self.sc_open.activated.connect(self.on_choose_file)
+        self.sc_copy = QShortcut(QKeySequence(QKeySequence.StandardKey.Copy), self)
+        self.sc_copy.activated.connect(self.on_copy_output)
+        self.sc_start = QShortcut(QKeySequence("Ctrl+Return"), self)
+        self.sc_start.activated.connect(self.on_start)
+
+        # Settings
+        self.settings = QSettings("groq-transcribe", "GroqTranscribe")
+        self.load_settings()
+
     @Slot()
     def on_format_options_changed(self, *args):
         if self.last_ts_source in ("segment", "word") and self.last_timed is not None:
@@ -279,6 +326,53 @@ class MainWindow(QMainWindow):
         else:
             if self.last_plain:
                 self.output.setPlainText(self.last_plain)
+
+    def set_inputs_enabled(self, enabled: bool):
+        widgets = [
+            self.api_edit,
+            self.save_key_btn,
+            self.lang_edit,
+            self.model_combo,
+            self.chunk_parallel_spin,
+            self.transcribe_parallel_spin,
+            self.ts_combo,
+            self.group_checkbox,
+            self.max_chars_spin,
+            self.llm_combo,
+            self.file_btn,
+            self.start_btn,
+            self.copy_btn,
+            self.save_btn,
+        ]
+        for w in widgets:
+            w.setEnabled(enabled)
+
+    def load_settings(self):
+        try:
+            self.lang_edit.setText(self.settings.value("language", self.lang_edit.text()))
+            self.model_combo.setCurrentText(self.settings.value("model", self.model_combo.currentText()))
+            self.chunk_parallel_spin.setValue(int(self.settings.value("chunk_parallel", self.chunk_parallel_spin.value())))
+            self.transcribe_parallel_spin.setValue(int(self.settings.value("transcribe_parallel", self.transcribe_parallel_spin.value())))
+            self.ts_combo.setCurrentText(self.settings.value("ts_source", self.ts_combo.currentText()))
+            self.group_checkbox.setChecked(self.settings.value("group_output", self.group_checkbox.isChecked(), type=bool))
+            self.max_chars_spin.setValue(int(self.settings.value("max_chars", self.max_chars_spin.value())))
+            self.llm_combo.setCurrentText(self.settings.value("llm_strategy", self.llm_combo.currentText()))
+        except Exception:
+            pass
+
+    def save_settings(self):
+        self.settings.setValue("language", self.lang_edit.text())
+        self.settings.setValue("model", self.model_combo.currentText())
+        self.settings.setValue("chunk_parallel", self.chunk_parallel_spin.value())
+        self.settings.setValue("transcribe_parallel", self.transcribe_parallel_spin.value())
+        self.settings.setValue("ts_source", self.ts_combo.currentText())
+        self.settings.setValue("group_output", self.group_checkbox.isChecked())
+        self.settings.setValue("max_chars", self.max_chars_spin.value())
+        self.settings.setValue("llm_strategy", self.llm_combo.currentText())
+
+    def closeEvent(self, event):
+        self.save_settings()
+        super().closeEvent(event)
 
     @Slot()
     def on_save_key(self):
@@ -349,9 +443,7 @@ class MainWindow(QMainWindow):
         self.worker.failed.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
         self.thread.start()
-
-        self.start_btn.setEnabled(False)
-        self.file_btn.setEnabled(False)
+        self.set_inputs_enabled(False)
 
     @Slot(int, int)
     def on_chunk_progress(self, done: int, total: int):
@@ -392,15 +484,36 @@ class MainWindow(QMainWindow):
             self.last_timed = None
             self.last_ts_source = "none"
         self.on_format_options_changed()
-        self.start_btn.setEnabled(True)
-        self.file_btn.setEnabled(True)
+        self.set_inputs_enabled(True)
 
     @Slot(str)
     def on_failed(self, err: str):
         self.status_label.setText("Failed")
         QMessageBox.critical(self, "Transcription Failed", err)
-        self.start_btn.setEnabled(True)
-        self.file_btn.setEnabled(True)
+        self.set_inputs_enabled(True)
+
+    @Slot()
+    def on_copy_output(self):
+        self.output.selectAll()
+        self.output.copy()
+        cursor = self.output.textCursor()
+        cursor.clearSelection()
+        self.output.setTextCursor(cursor)
+
+    @Slot()
+    def on_save_output(self):
+        text = self.output.toPlainText()
+        if not text:
+            QMessageBox.information(self, "Save Transcript", "There is no transcript to save yet.")
+            return
+        default_name = "transcript.txt"
+        path, _ = QFileDialog.getSaveFileName(self, "Save transcript", str(Path.home() / default_name), "Text Files (*.txt)")
+        if path:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+            except Exception as exc:
+                QMessageBox.critical(self, "Save Failed", str(exc))
 
 
 def main():

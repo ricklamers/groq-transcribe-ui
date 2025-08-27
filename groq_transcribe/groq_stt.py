@@ -28,7 +28,7 @@ class ChunkTranscript:
     error: Optional[str] = None
 
 
-DEFAULT_STT_MODEL = "whisper-large-v3-turbo"
+DEFAULT_STT_MODEL = "whisper-large-v3"
 
 
 def _get_client() -> Groq:
