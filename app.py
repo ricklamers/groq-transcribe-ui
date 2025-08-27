@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QCheckBox,
     QSplitter,
+    QDoubleSpinBox,
 )
 
 from groq_transcribe.config import get_api_key, set_api_key
@@ -42,11 +43,12 @@ class Worker(QObject):
     finished = Signal(object)  # dict with keys: plain:str, timed:List[TimedText]|None, ts_source:str
     failed = Signal(str)
 
-    def __init__(self, path: str, language: Optional[str], stt_model: str, chunk_parallel: int, transcribe_parallel: int, ts_source: str, group_output: bool, max_chars: int, llm_strategy: str):
+    def __init__(self, path: str, language: Optional[str], stt_model: str, target_chunk_mb: float, chunk_parallel: int, transcribe_parallel: int, ts_source: str, group_output: bool, max_chars: int, llm_strategy: str):
         super().__init__()
         self.path = path
         self.language = language
         self.stt_model = stt_model
+        self.target_chunk_mb = max(0.5, float(target_chunk_mb))
         self.chunk_parallel = max(1, chunk_parallel)
         self.transcribe_parallel = max(1, transcribe_parallel)
         self.ts_source = ts_source  # 'none' | 'segment' | 'word'
@@ -60,7 +62,7 @@ class Worker(QObject):
             self.status.emit("Chunking audio...")
             chunks = chunk_audio(
                 self.path,
-                target_chunk_mb=10.0,
+                target_chunk_mb=self.target_chunk_mb,
                 overlap_sec=1.0,
                 parallelism=self.chunk_parallel,
                 progress_cb=lambda d, t: self.chunk_progress.emit(d, t),
@@ -171,6 +173,19 @@ class MainWindow(QMainWindow):
         self.chunk_parallel_spin.setToolTip("How many chunks are prepared in parallel while pre-processing.")
         chunk_par_layout.addWidget(self.chunk_parallel_spin)
         config_layout.addLayout(chunk_par_layout)
+
+        # Chunk size
+        chunk_size_layout = QHBoxLayout()
+        chunk_size_layout.addWidget(QLabel("Target chunk size (MB):"))
+        self.chunk_size_spin = QDoubleSpinBox()
+        self.chunk_size_spin.setDecimals(1)
+        self.chunk_size_spin.setSingleStep(0.5)
+        self.chunk_size_spin.setMinimum(0.5)
+        self.chunk_size_spin.setMaximum(200.0)
+        self.chunk_size_spin.setValue(10.0)
+        self.chunk_size_spin.setToolTip("Approximate size per chunk to increase parallelism (smaller = more chunks).")
+        chunk_size_layout.addWidget(self.chunk_size_spin)
+        config_layout.addLayout(chunk_size_layout)
 
         # Parallelism for transcription
         tr_par_layout = QHBoxLayout()
@@ -334,6 +349,7 @@ class MainWindow(QMainWindow):
             self.lang_edit,
             self.model_combo,
             self.chunk_parallel_spin,
+            self.chunk_size_spin,
             self.transcribe_parallel_spin,
             self.ts_combo,
             self.group_checkbox,
@@ -352,6 +368,7 @@ class MainWindow(QMainWindow):
             self.lang_edit.setText(self.settings.value("language", self.lang_edit.text()))
             self.model_combo.setCurrentText(self.settings.value("model", self.model_combo.currentText()))
             self.chunk_parallel_spin.setValue(int(self.settings.value("chunk_parallel", self.chunk_parallel_spin.value())))
+            self.chunk_size_spin.setValue(float(self.settings.value("target_chunk_mb", self.chunk_size_spin.value())))
             self.transcribe_parallel_spin.setValue(int(self.settings.value("transcribe_parallel", self.transcribe_parallel_spin.value())))
             self.ts_combo.setCurrentText(self.settings.value("ts_source", self.ts_combo.currentText()))
             self.group_checkbox.setChecked(self.settings.value("group_output", self.group_checkbox.isChecked(), type=bool))
@@ -364,6 +381,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("language", self.lang_edit.text())
         self.settings.setValue("model", self.model_combo.currentText())
         self.settings.setValue("chunk_parallel", self.chunk_parallel_spin.value())
+        self.settings.setValue("target_chunk_mb", self.chunk_size_spin.value())
         self.settings.setValue("transcribe_parallel", self.transcribe_parallel_spin.value())
         self.settings.setValue("ts_source", self.ts_combo.currentText())
         self.settings.setValue("group_output", self.group_checkbox.isChecked())
@@ -416,6 +434,7 @@ class MainWindow(QMainWindow):
         language = self.lang_edit.text().strip() or None
         stt_model = self.model_combo.currentText()
         chunk_parallel = self.chunk_parallel_spin.value()
+        target_chunk_mb = float(self.chunk_size_spin.value())
         transcribe_parallel = self.transcribe_parallel_spin.value()
         ts_source = self.ts_combo.currentText()
         group_output = self.group_checkbox.isChecked()
@@ -428,7 +447,7 @@ class MainWindow(QMainWindow):
         self.last_ts_source = ts_source
 
         self.thread = QThread()
-        self.worker = Worker(self.input_path, language, stt_model, chunk_parallel, transcribe_parallel, ts_source, group_output, max_chars, llm_strategy)
+        self.worker = Worker(self.input_path, language, stt_model, target_chunk_mb, chunk_parallel, transcribe_parallel, ts_source, group_output, max_chars, llm_strategy)
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.chunk_progress.connect(self.on_chunk_progress)
