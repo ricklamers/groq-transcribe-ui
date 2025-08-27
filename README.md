@@ -1,5 +1,7 @@
 ## Groq Transcribe UI (Qt)
 
+<img width="1212" height="1000" alt="Screenshot 2025-08-27 at 4 31 27 PM" src="https://github.com/user-attachments/assets/16935998-d11a-42f9-a87d-c9a854379fb4" />
+
 A PySide6 desktop app to transcribe large audio files with Groq STT, handling chunking, parallel uploads, and LLM-based stitching. Stores and reuses your GROQ_API_KEY.
 
 ### Setup
