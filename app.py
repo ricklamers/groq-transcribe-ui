@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+import time
 from typing import Optional, List, Dict, Any
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot, QSettings
@@ -59,6 +60,7 @@ class Worker(QObject):
     @Slot()
     def run(self):
         try:
+            start_wall = time.perf_counter()
             self.status.emit("Chunking audio...")
             chunks = chunk_audio(
                 self.path,
@@ -105,10 +107,16 @@ class Worker(QObject):
             if self.ts_source in ("segment", "word"):
                 timed = merge_to_global(successes, source=self.ts_source)
 
+            end_wall = time.perf_counter()
+            wall_seconds = max(0.0, end_wall - start_wall)
+            audio_duration_seconds = float(chunks[-1].end_sec) if chunks else 0.0
+
             payload: Dict[str, Any] = {
                 "plain": stitched_text,
                 "timed": timed,
                 "ts_source": self.ts_source,
+                "wall_seconds": wall_seconds,
+                "audio_duration_seconds": audio_duration_seconds,
             }
             self.finished.emit(payload)
         except Exception as exc:
@@ -492,16 +500,23 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def on_finished(self, payload: object):
-        self.status_label.setText("Done")
         try:
             data: Dict[str, Any] = payload  # type: ignore
             self.last_plain = data.get("plain") or ""
             self.last_timed = data.get("timed")
             self.last_ts_source = data.get("ts_source") or "none"
+            wall_seconds = float(data.get("wall_seconds") or 0.0)
+            audio_seconds = float(data.get("audio_duration_seconds") or 0.0)
+            if wall_seconds > 0.0 and audio_seconds > 0.0:
+                rtf = audio_seconds / wall_seconds if wall_seconds > 0 else 0.0
+                self.status_label.setText(f"Done in {wall_seconds:.2f}s • RTF {rtf:.1f}x")
+            else:
+                self.status_label.setText("Done")
         except Exception:
             self.last_plain = str(payload)
             self.last_timed = None
             self.last_ts_source = "none"
+            self.status_label.setText("Done")
         self.on_format_options_changed()
         self.set_inputs_enabled(True)
 
